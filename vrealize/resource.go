@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform/helper/schema"
+
+	"encoding/json"
 )
 
 //ResourceViewsTemplate - is used to store information
@@ -154,17 +156,39 @@ func setResourceSchema() map[string]*schema.Schema {
 
 //Function use - to create machine
 //Terraform call - terraform apply
-func changeTemplateValue(templateInterface map[string]interface{}, field string, value interface{}) map[string]interface{} {
+func changeTemplateValue(templateInterface map[string]interface{}, field string, value interface{}) (map[string]interface{}, bool) {
+	var replaced bool
 	//Iterate over the map to get field provided as an argument
 	for i := range templateInterface {
 		//If value type is map then set recursive call which will fiend field in one level down of map interface
 		if reflect.ValueOf(templateInterface[i]).Kind() == reflect.Map {
+			//CRTLOGGING
+			//	log.Printf("ChangeTemplate(if): field=[%v], i=[%v],value=[%v]", field, i, value)
 			template, _ := templateInterface[i].(map[string]interface{})
-			templateInterface[i] = changeTemplateValue(template, field, value)
+			templateInterface[i], replaced = changeTemplateValue(template, field, value)
+			//return templateInterface, replaced
 		} else if i == field {
 			//If value type is not map then compare field name with provided field name
 			//If both matches then update field value with provided value
 			templateInterface[i] = value
+			return templateInterface, true
+		}
+	}
+	//Return updated map interface type
+	return templateInterface, replaced
+}
+
+//modeled after changeTemplateValue, for values being added to template vs updating existing ones
+func addTemplateValue(templateInterface map[string]interface{}, field string, value interface{}) map[string]interface{} {
+	//simplest case is adding a simple value. Leaving as a func in case there's a need to do more complicated additions later
+	//	templateInterface[data]
+	for i := range templateInterface {
+		if reflect.ValueOf(templateInterface[i]).Kind() == reflect.Map && i == "data" {
+			template, _ := templateInterface[i].(map[string]interface{})
+			templateInterface[i] = addTemplateValue(template, field, value)
+			//return templateInterface, replaced
+		} else {
+			templateInterface[field] = value
 		}
 	}
 	//Return updated map interface type
@@ -238,6 +262,9 @@ func createResource(d *schema.ResourceData, meta interface{}) error {
 		}
 	}
 
+	//CRTLogging
+	usedConfigKeys := []string{}
+	var replaced bool
 	//Update template field values with user configuration
 	resourceConfiguration, _ := d.Get("resource_configuration").(map[string]interface{})
 	for configKey := range resourceConfiguration {
@@ -247,15 +274,36 @@ func createResource(d *schema.ResourceData, meta interface{}) error {
 				//If user_configuration contains resource_list element
 				// then split user configuration key into resource_name and field_name
 				splitedArray := strings.Split(configKey, keyList[dataKey]+".")
-				//Function call which changes the template field values with  user values
-				templateCatalogItem.Data[keyList[dataKey]] = changeTemplateValue(
+				templateCatalogItem.Data[keyList[dataKey]], replaced = changeTemplateValue(
 					templateCatalogItem.Data[keyList[dataKey]].(map[string]interface{}),
 					splitedArray[1],
 					resourceConfiguration[configKey])
+				if replaced {
+					usedConfigKeys = append(usedConfigKeys, configKey)
+				} else {
+					log.Printf("%s was not replaced", configKey)
+				}
 			}
 		}
-		//delete used user configuration
-		delete(resourceConfiguration, configKey)
+	}
+
+	//CRT Add remaining keys to template vs updating values
+	for usedKey := range usedConfigKeys {
+		delete(resourceConfiguration, usedConfigKeys[usedKey])
+	}
+	log.Printf("Entering Add Loop")
+	for configKey2 := range resourceConfiguration {
+		for dataKey := range keyList {
+			log.Printf("Add Loop: configKey2=[%s] keyList[%d] =[%v]", configKey2, dataKey, keyList[dataKey])
+			if strings.Contains(configKey2, keyList[dataKey]) {
+				splitArray := strings.Split(configKey2, keyList[dataKey]+".")
+				log.Printf("Add Loop Contains %+v", splitArray)
+				templateCatalogItem.Data[keyList[dataKey]] = addTemplateValue(
+					templateCatalogItem.Data[keyList[dataKey]].(map[string]interface{}),
+					splitArray[1],
+					resourceConfiguration[configKey2])
+			}
+		}
 	}
 	//update template with deployment level config
 	// limit to description and reasons as other things could get us into trouble
@@ -477,6 +525,15 @@ func (c *APIClient) RequestMachine(template *CatalogItemTemplate) (*RequestMachi
 	requestMachineRes := new(RequestMachineResponse)
 	apiError := new(APIError)
 	//Set a REST call to create a machine
+	//CRTLOGGING
+	jsonBody, jErr := json.Marshal(template)
+	if jErr != nil {
+		log.Printf("jErr!!!!!")
+		return nil, jErr
+	} else {
+		log.Printf("Json Request Info: %s", jsonBody)
+	}
+	//END CRT LOGGING
 	_, err := c.HTTPClient.New().Post(path).BodyJSON(template).
 		Receive(requestMachineRes, apiError)
 
