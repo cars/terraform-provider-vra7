@@ -162,8 +162,6 @@ func changeTemplateValue(templateInterface map[string]interface{}, field string,
 	for i := range templateInterface {
 		//If value type is map then set recursive call which will fiend field in one level down of map interface
 		if reflect.ValueOf(templateInterface[i]).Kind() == reflect.Map {
-			//CRTLOGGING
-			//	log.Printf("ChangeTemplate(if): field=[%v], i=[%v],value=[%v]", field, i, value)
 			template, _ := templateInterface[i].(map[string]interface{})
 			templateInterface[i], replaced = changeTemplateValue(template, field, value)
 			//return templateInterface, replaced
@@ -182,14 +180,17 @@ func changeTemplateValue(templateInterface map[string]interface{}, field string,
 func addTemplateValue(templateInterface map[string]interface{}, field string, value interface{}) map[string]interface{} {
 	//simplest case is adding a simple value. Leaving as a func in case there's a need to do more complicated additions later
 	//	templateInterface[data]
+	log.Printf("In Add TemplateValue field = [%s], value = [%+v],tInt = [%+v]", field, value, templateInterface)
 	for i := range templateInterface {
 		if reflect.ValueOf(templateInterface[i]).Kind() == reflect.Map && i == "data" {
 			template, _ := templateInterface[i].(map[string]interface{})
 			templateInterface[i] = addTemplateValue(template, field, value)
-			//return templateInterface, replaced
-		} else {
+			log.Printf("Back from recurse addTVa")
+		} else { //if i == "data" {
+			log.Printf("Adding ti[%s] = %s", field, value)
 			templateInterface[field] = value
 		}
+
 	}
 	//Return updated map interface type
 	return templateInterface
@@ -262,7 +263,7 @@ func createResource(d *schema.ResourceData, meta interface{}) error {
 		}
 	}
 
-	//CRTLogging
+	//array to keep track of resource values that have been used
 	usedConfigKeys := []string{}
 	var replaced bool
 	//Update template field values with user configuration
@@ -287,19 +288,21 @@ func createResource(d *schema.ResourceData, meta interface{}) error {
 		}
 	}
 
-	//CRT Add remaining keys to template vs updating values
+	//Add remaining keys to template vs updating values
+	// first clean out used values
 	for usedKey := range usedConfigKeys {
 		delete(resourceConfiguration, usedConfigKeys[usedKey])
 	}
-	log.Printf("Entering Add Loop")
+	log.Println("Entering Add Loop")
 	for configKey2 := range resourceConfiguration {
 		for dataKey := range keyList {
 			log.Printf("Add Loop: configKey2=[%s] keyList[%d] =[%v]", configKey2, dataKey, keyList[dataKey])
 			if strings.Contains(configKey2, keyList[dataKey]) {
 				splitArray := strings.Split(configKey2, keyList[dataKey]+".")
-				log.Printf("Add Loop Contains %+v", splitArray)
-				templateCatalogItem.Data[keyList[dataKey]] = addTemplateValue(
-					templateCatalogItem.Data[keyList[dataKey]].(map[string]interface{}),
+				log.Printf("Add Loop Contains %+v", splitArray[1])
+				resourceItem := templateCatalogItem.Data[keyList[dataKey]].(map[string]interface{})
+				resourceItem = addTemplateValue(
+					resourceItem["data"].(map[string]interface{}),
 					splitArray[1],
 					resourceConfiguration[configKey2])
 			}
